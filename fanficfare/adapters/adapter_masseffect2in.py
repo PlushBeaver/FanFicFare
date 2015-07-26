@@ -20,6 +20,7 @@ import datetime
 import logging
 import re
 import urllib2
+import codecs
 
 from ..htmlcleanup import removeEntities, stripHTML
 from .. import exceptions as exceptions
@@ -294,6 +295,36 @@ class MassEffect2InAdapter(BaseSiteAdapter):
     def _makeDocumentUrl(cls, documentId):
         """Make a chapter URL given a document ID."""
         return 'http://%s/publ/%s' % (cls.getSiteDomain(), documentId)
+
+    def _fetchUrl(self, url,
+                  parameters=None,
+                  usecache=True,
+                  extrasleep=None):
+        """Fetch URL contents, see BaseSiteAdapter for details.
+        Overridden to support on-disk cache when debugging Calibre."""
+        from calibre.constants import DEBUG
+        if DEBUG:
+            import os
+            documentId = self._getDocumentId(url)
+            path = u'./cache/%s' % documentId
+            if os.path.isfile(path) and os.access(path, os.R_OK):
+                _logger.debug(u"On-disk cache HIT for `%s'.", url)
+                with codecs.open(path, encoding='utf-8') as input:
+                    return input.read()
+            else:
+                _logger.debug(u"On-disk cache MISS for `%s'.", url)
+
+        content = BaseSiteAdapter._fetchUrl(
+            self, url, parameters, usecache, extrasleep)
+
+        if DEBUG:
+            import os
+            if os.path.isdir(os.path.dirname(path)):
+                _logger.debug(u"Caching `%s' content on disk.", url)
+                with codecs.open(path, mode='w', encoding='utf-8') as output:
+                    output.write(content)
+
+        return content
 
 
 class Chapter(object):
@@ -717,3 +748,49 @@ def _getLargestCommonPrefix(*args):
     toLower = lambda xs: map(lambda x: x.lower(), xs)
     allSame = lambda xs: len(set(toLower(xs))) == 1
     return u''.join([i[0] for i in takewhile(allSame, izip(*args))])
+
+
+def test_stop_words_detection():
+    cases = [
+        u'и т. д.', u'и т.д.', u'и т.д', u'и тд.',
+        u'и т. п.', u'и т.п.', u'и т.п', u'и тп.', u'и т',
+        u'и др.', u'и др', u'и другие',
+        u'и пр.', u'и пр', u'и прочие',
+        u'и компания', u'и ко', u'и Ко', u'и Ko', u'и К°', u'и K°',
+    ]
+    cases = dict.fromkeys(cases, True)
+    detector = lambda string: bool(re.match(Chapter.ETC_PATTERN, string))
+    test(detector, cases, u"Detection of Russian forms of `et cetera' and `at al'")
+
+
+def test(algorithm,
+         cases,
+         title,
+         fail_formatter=lambda input, expected, output: u"with `%s' expected %s, got %s" % (input, expected, output)):
+        _logger.debug(u'')
+        _logger.debug(title)
+        _logger.debug(u"-" * len(title))
+        passed, failed = 0, 0
+        for input, expected in cases.iteritems():
+            output = algorithm(input)
+            if output != expected:
+                failed += 1
+                message = fail_formatter(input, expected, output)
+                _logger.debug(u"[FAIL] %s" % message)
+            else:
+                passed += 1
+                _logger.debug(u"[ OK ] %s" % input)
+        _logger.debug(u'-' * len(title))
+        if failed == 0:
+            _logger.debug(u"All %d test cases passed!" % passed)
+        else:
+            _logger.debug(u"Some %d test cases failed, %d passed (%d total)" % (failed, passed, len(cases)))
+        _logger.debug(u'=' * len(title))
+
+
+if False:
+    title = u"Running tests"
+    _logger.debug(u'=' * len(title))
+    _logger.debug(title)
+    dummyChapter = Chapter(None, None, None)
+    test_stop_words_detection()
